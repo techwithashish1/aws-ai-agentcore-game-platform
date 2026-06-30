@@ -12,28 +12,7 @@ tiered model selection. See [DOCUMENTATION.md](docs/DOCUMENTATION.md) for full d
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  UI["React SPA\nboard + caption + audio"] <-->|WSS| WS["API GW WebSocket"]
-  WS --> ENG["Game Engine λ"] --> DDB[("DynamoDB\nmatches+profiles+leaderboard")]
-  ENG -->|TurnCompleted / MatchEvent| EB{{EventBridge}}
-  EB --> ORC["Orchestrator λ (router)"]
-  ORC -->|invoke runtime| STRAT["Strategist\nmodel-selected Tactical only"]
-  STRAT -.A2A plan.-> EXEC["Executor agent\nAgentCore Runtime"]
-  ORC -.->|Tic-Tac-Toe: no Strategist| EXEC
-  EXEC --> AG["Action Group λ"]
-  AG --> DDB
-  AG -->|state push| WS
-  EB --> COML["Commentary adapter λ"]
-  COML --> COMR["Commentary agent\nAgentCore Runtime"]
-  COMR --> COML
-  COML -->|caption+audio / Polly| WS
-  EB --> COHL["Coach adapter λ"]
-  COHL --> COHR["Coach agent\nAgentCore Runtime"]
-  COHR --> COHL
-  COHL -->|teaching tip| WS
-  COMR -. exposes .- MCP([MCP commentary tools])
-```
+![alt text](Human_vs_AI_Game_Platform_Architecture.jpg)
 
 ## Repo layout
 

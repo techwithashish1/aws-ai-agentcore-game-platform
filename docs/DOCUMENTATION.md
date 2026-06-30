@@ -37,47 +37,7 @@ Bedrock console.
 
 ## 2. Architecture
 
-```mermaid
-flowchart LR
-  subgraph Client["Presentation"]
-    UI["React SPA\nboard + caption + audio"]
-  end
-  subgraph Transport
-    WS["API GW WebSocket"]
-  end
-  subgraph Game["Game mechanics"]
-    ENG["Game Engine λ"]
-    AG["Action Group λ"]
-  end
-  subgraph Data
-    DDB[("DynamoDB\nmatches + profiles + leaderboard")]
-  end
-  EB{{"EventBridge"}}
-  subgraph AI["AI control"]
-    ORC["Orchestrator λ\nrouter + retry"]
-    STRAT["Strategist\nmodel-selected Tactical only"]
-    EXEC["Executor agent\nAgentCore Runtime"]
-    COML["Commentary adapter λ"]
-    COMR["Commentary agent\nAgentCore Runtime"]
-    COACHL["Coach adapter λ"]
-    COACHR["Coach agent\nAgentCore Runtime"]
-    MCP(["MCP catalog\ncommentary/memory/leaderboard/analysis/coach"])
-  end
-  UI <-->|WSS| WS --> ENG --> DDB
-  ENG -->|TurnCompleted / MatchEvent| EB
-  EB --> ORC -->|invoke runtime| STRAT
-  STRAT -.A2A plan.-> EXEC
-  ORC -.->|Tic-Tac-Toe: no Strategist| EXEC
-  EXEC --> AG --> DDB
-  AG -->|state push| WS
-  EB --> COML --> COMR
-  COMR --> COML -->|caption+audio| WS
-  EB --> COACHL --> COACHR
-  COACHR --> COACHL -->|teaching tip| WS
-  COMR -. exposes .- MCP
-  COACHR -. exposes .- MCP
-  ORC -.reads.-> DDB
-```
+![alt text](Human_vs_AI_Game_Platform_Architecture.jpg)
 
 The frontend connection is freed the moment a move is accepted. AI work (move,
 commentary, coaching) happens async via EventBridge, and results are pushed back over

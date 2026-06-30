@@ -1,8 +1,9 @@
 """Tic-Tac-Toe specialist agent for Amazon Bedrock AgentCore Runtime.
 
-Uses Strands Agents with Amazon Nova Lite. The orchestrator invokes this runtime
-with {matchId, board, connectionId}. The agent reasons over the board and calls
-the `play_move` tool, which is wired to the Action Group Lambda that writes state.
+The orchestrator invokes this runtime with {matchId, board, connectionId,
+modelProfile}. The selected profile chooses between Nova and Claude per
+difficulty tier, and the agent emits one JSON move that is applied by the
+action-group Lambda.
 """
 import json
 import os
@@ -22,12 +23,18 @@ SYSTEM = (
     "else center/corner). Output EXACTLY one JSON object only: {\"cell\": 0-8}."
 )
 
-# Difficulty -> Nova model. Stronger model = tougher opponent.
-MODELS = {"easy": "amazon.nova-micro-v1:0", "medium": "amazon.nova-lite-v1:0", "hard": "amazon.nova-pro-v1:0"}
+MODEL_MAP = {
+    "easy_amazon": os.environ.get("TICTACTOE_EASY_AMAZON_MODEL_ID", "amazon.nova-micro-v1:0"),
+    "easy_claude": os.environ.get("TICTACTOE_EASY_CLAUDE_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+    "medium_amazon": os.environ.get("TICTACTOE_MEDIUM_AMAZON_MODEL_ID", "amazon.nova-lite-v1:0"),
+    "medium_claude": os.environ.get("TICTACTOE_MEDIUM_CLAUDE_MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+    "hard_amazon": os.environ.get("TICTACTOE_HARD_AMAZON_MODEL_ID", "amazon.nova-pro-v1:0"),
+    "hard_claude": os.environ.get("TICTACTOE_HARD_CLAUDE_MODEL_ID", "global.anthropic.claude-opus-4-6-v1"),
+}
 
 
-def _agent(difficulty: str) -> Agent:
-    return Agent(model=BedrockModel(model_id=MODELS.get(difficulty, MODELS["medium"])), system_prompt=SYSTEM)
+def _agent(model_profile: str) -> Agent:
+    return Agent(model=BedrockModel(model_id=MODEL_MAP.get(model_profile, MODEL_MAP["medium_amazon"])), system_prompt=SYSTEM)
 
 
 def _parse_cell(text: str) -> int | None:
@@ -52,7 +59,7 @@ def invoke(payload: dict):
     match_id = payload["matchId"]
     board = payload["board"]
     opp = payload.get("opponent", "")
-    response = str(_agent(payload.get("difficulty", "medium"))(f"matchId={match_id}. Board={board}. {opp} Make your move. Output JSON only."))
+    response = str(_agent(payload.get("modelProfile", "easy_amazon"))(f"matchId={match_id}. Board={board}. {opp} Make your move. Output JSON only."))
     cell = _parse_cell(response)
     if cell is None or board[cell] != 0:
         cell = _fallback_cell(board)

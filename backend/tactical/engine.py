@@ -39,6 +39,7 @@ def lambda_handler(event, _ctx):
             "currentTurn": "Human",
             "username": body.get("username", "guest"),
             "difficulty": body.get("difficulty", "easy"),
+            "modelProfile": body.get("modelProfile", "easy_amazon"),
             "state": {**new_state(), "actedIds": []},
         }
         _persist(match, endpoint)

@@ -1,13 +1,9 @@
 """Tactical Arena specialist agent for Amazon Bedrock AgentCore Runtime.
 
-8x8 squad combat (Tank/Striker/Support). Higher complexity than tic-tac-toe, so it
-uses Amazon Nova Pro. The orchestrator invokes this runtime with the full unit list;
-the agent reasons over positioning, HP pressure, and focus-fire, then calls the
-`unit_action` tool for each living AI unit. The tool is wired to the Action Group
-Lambda which validates and applies moves/attacks and pushes state over WebSocket.
-
-Model is complexity-tiered: set TACTICAL_MODEL_ID to pick the Nova tier.
-  Low:  amazon.nova-lite-v1:0   Medium: amazon.nova-micro-v1:0   High: amazon.nova-pro-v1:0
+8x8 squad combat (Tank/Striker/Support). The orchestrator invokes this runtime
+with the full unit list and a modelProfile. The selected profile chooses between
+Nova and Claude per difficulty tier, and the agent reasons over positioning,
+HP pressure, and focus-fire before calling the action-group Lambda.
 """
 import json
 import os
@@ -21,9 +17,14 @@ app = BedrockAgentCoreApp()
 _lambda = boto3.client("lambda")
 ACTION_GROUP_FN = os.environ.get("ACTION_GROUP_FUNCTION", "TacticalActionFunction")
 
-# Difficulty -> Nova tier. Override any tier with TACTICAL_MODEL_ID env.
-MODELS = {"easy": "amazon.nova-lite-v1:0", "medium": "amazon.nova-micro-v1:0", "hard": "amazon.nova-pro-v1:0"}
-STRATEGIST_MODEL = os.environ.get("STRATEGIST_MODEL_ID", "amazon.nova-pro-v1:0")
+MODEL_MAP = {
+    "easy_amazon": os.environ.get("TACTICAL_EASY_AMAZON_MODEL_ID", "amazon.nova-lite-v1:0"),
+    "easy_claude": os.environ.get("TACTICAL_EASY_CLAUDE_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+    "medium_amazon": os.environ.get("TACTICAL_MEDIUM_AMAZON_MODEL_ID", "amazon.nova-micro-v1:0"),
+    "medium_claude": os.environ.get("TACTICAL_MEDIUM_CLAUDE_MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+    "hard_amazon": os.environ.get("TACTICAL_HARD_AMAZON_MODEL_ID", "amazon.nova-pro-v1:0"),
+    "hard_claude": os.environ.get("TACTICAL_HARD_CLAUDE_MODEL_ID", "global.anthropic.claude-opus-4-6-v1"),
+}
 
 SYSTEM = (
     "You command the AI squad in an 8x8 tactical arena. Tank(hp140,atk18,rng1), "
@@ -59,16 +60,15 @@ def unit_action(match_id: str, unit_id: str, action: str, x: int = -1, y: int = 
     return resp["Payload"].read().decode()
 
 
-def _agent(difficulty: str) -> Agent:
-    model_id = os.environ.get("TACTICAL_MODEL_ID") or MODELS.get(difficulty, MODELS["medium"])
-    return Agent(model=BedrockModel(model_id=model_id), system_prompt=EXECUTOR)
+def _agent(model_profile: str, system_prompt: str = EXECUTOR) -> Agent:
+    return Agent(model=BedrockModel(model_id=MODEL_MAP.get(model_profile, MODEL_MAP["medium_amazon"])), system_prompt=system_prompt)
 
 
-def _plan(difficulty: str, units) -> str:
-    """A2A: a Strategist agent sets intent for medium/hard; easy skips planning."""
-    if difficulty == "easy":
+def _plan(model_profile: str, units) -> str:
+    """A2A: a Strategist agent sets intent; easy profiles skip planning."""
+    if model_profile.startswith("easy_"):
         return ""
-    strategist = Agent(model=BedrockModel(model_id=STRATEGIST_MODEL), system_prompt=STRATEGIST)
+    strategist = _agent(model_profile, STRATEGIST)
     return str(strategist(f"Units={json.dumps(units)}. Plan the squad's turn."))
 
 
@@ -113,10 +113,11 @@ def _normalize_action(action: dict, units) -> dict:
 @app.entrypoint
 def invoke(payload: dict):
     match_id = payload["matchId"]
-    difficulty = payload.get("difficulty", "medium")
+    model_profile = payload.get("modelProfile", "easy_amazon")
+    difficulty = payload.get("difficulty", "easy")
     units = payload["units"]
-    plan = _plan(difficulty, units)
-    agent = _agent(difficulty)
+    plan = _plan(model_profile, units)
+    agent = _agent(model_profile)
     response = str(agent(f"matchId={match_id}. Units={json.dumps(units)}. Turn={payload.get('turn')}. "
                          f"{payload.get('opponent', '')} Strategist plan: {plan or 'none'}. "
                          "Choose exactly one action for exactly one AI unit and output JSON only."))

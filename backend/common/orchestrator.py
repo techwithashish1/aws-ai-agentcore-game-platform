@@ -30,9 +30,9 @@ def lambda_handler(event, _ctx):
     diff = item.get("difficulty", "easy")
     note = profile_note(item.get("username", "guest"), game_id)
     if game_id == "tactical":
-        payload = {"matchId": match_id, "connectionId": item["connectionId"], "units": state["units"], "turn": state.get("turn"), "difficulty": diff, "opponent": note}
+        payload = {"matchId": match_id, "connectionId": item["connectionId"], "units": state["units"], "turn": state.get("turn"), "difficulty": diff, "modelProfile": item.get("modelProfile", "easy_amazon"), "opponent": note}
     else:
-        payload = {"matchId": match_id, "connectionId": item["connectionId"], "board": state["board"], "difficulty": diff, "opponent": note}
+        payload = {"matchId": match_id, "connectionId": item["connectionId"], "board": state["board"], "difficulty": diff, "modelProfile": item.get("modelProfile", "easy_amazon"), "opponent": note}
 
     last_err = None
     for attempt in range(3):

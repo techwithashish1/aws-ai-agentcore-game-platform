@@ -19,16 +19,21 @@
 
 An event-driven, fully serverless platform where humans play turn-based games
 against specialist AI agents. Each agent runs on **Amazon Bedrock AgentCore
-Runtime** and reasons with **Amazon Nova** models. Game mechanics are deterministic
-and live in code; AI decision-making is isolated behind an asynchronous boundary so
-player connections never hang while the model thinks.
+Runtime** and can reason with **Amazon Nova** or **Claude** models. Game mechanics
+are deterministic and live in code; AI decision-making is isolated behind an
+asynchronous boundary so player connections never hang while the model thinks.
 
-- **First game:** Tic-Tac-Toe (difficulty-tiered Nova: Micro/Lite/Pro)
-- **Second game:** Tactical Arena — 8×8 squad combat (Tank/Striker/Support), difficulty-tiered Nova (Lite/Micro/Pro)
+Claude uses Bedrock inference profile IDs or ARNs, not plain on-demand model IDs.
+The repo defaults use profile-style IDs such as `us.*` and `global.*`, but if
+your account or region differs, replace them with the exact profile from the
+Bedrock console.
+
+- **First game:** Tic-Tac-Toe (six profiles: easy/medium/hard × Amazon/Claude)
+- **Second game:** Tactical Arena — 8×8 squad combat (Tank/Striker/Support), same six-profile selector
 - **Multi-agent AI:** Strategist/Executor (A2A) split, a teaching **Coach agent**, opponent-memory profiles, and a live AI commentator (text + emotional Polly audio)
 - **Shared MCP catalog:** commentary, memory, leaderboard, board-analysis, and coaching tools any agent can discover and reuse
 - **Pattern:** the board is reduced to a semantic array `M ∈ {0,1,-1}^{3×3}` (1=Human, -1=AI, 0=empty) to minimize tokens
-- **Roadmap:** Chess/Poker (Nova Lite), Logic Riddles (Nova Pro)
+- **Roadmap:** Chess/Poker, Logic Riddles
 
 ## 2. Architecture
 
@@ -50,7 +55,7 @@ flowchart LR
   EB{{"EventBridge"}}
   subgraph AI["AI control"]
     ORC["Orchestrator λ\nrouter + retry"]
-    STRAT["Strategist (Nova Pro)\nTactical only"]
+    STRAT["Strategist\nmodel-selected Tactical only"]
     EXEC["Executor agent\nAgentCore Runtime"]
     COML["Commentary adapter λ"]
     COMR["Commentary agent\nAgentCore Runtime"]
@@ -89,8 +94,8 @@ future games and agents discover them unchanged.
 | Database | DynamoDB (single-table) | Matches, moves, connections |
 | Event bus | EventBridge | `TurnCompleted` decouples UI from AI |
 | AI control | Bedrock AgentCore Runtime | Hosts isolated agent sessions |
-| Inference | Amazon Nova Lite | Fast tactical move selection |
-| Multi-agent | Strategist + Executor (A2A) | Nova Pro plans, executor moves |
+| Inference | Amazon Nova / Claude | Fast tactical move selection with six selectable profiles |
+| Multi-agent | Strategist + Executor (A2A) | Selected model profile plans, executor moves |
 | Coach runtime | AgentCore Runtime + Nova | Generates teaching tips |
 | Coach adapter | AWS Lambda | EventBridge trigger + WS push |
 | Commentary runtime | AgentCore Runtime + Nova | Generates line + emotion |
@@ -109,7 +114,7 @@ future games and agents discover them unchanged.
 3. **Async break** — emits `TurnCompleted` to EventBridge; UI shows "AI thinking…".
 4. **Routing** — Orchestrator maps `gameId → AgentCore runtime ARN` and invokes it
    with the board state.
-5. **Inference** — Nova Lite agent picks a cell and calls the `play_move` tool.
+5. **Inference** — the selected `modelProfile` picks the matching model and the agent returns one JSON move.
 6. **Action** — Action Group Lambda writes the move, sets `currentTurn=Human`,
    pushes new state over WebSocket. Board unlocks.
 7. **Commentary** — each move emits `MatchEvent`; the Commentary adapter Lambda invokes
@@ -128,8 +133,8 @@ Components in the exact order they fire for a single human move:
 3. **Game Engine λ** — [tictactoe/engine.py](../backend/tictactoe/engine.py): loads/creates match, validates cell, writes DynamoDB, sets `currentTurn=AI`, returns immediately (UI never hangs).
 4. **Opponent memory** — [profile.py](../backend/common/profile.py): `note_move` records your move under `PROFILE#<username>` for cross-match adaptation.
 5. **EventBridge** — engine emits `TurnCompleted` (wake AI) + `MatchEvent` (commentary); this async boundary frees the connection.
-6. **Orchestrator λ (router)** — [orchestrator.py](../backend/common/orchestrator.py): maps `tictactoe→ARN`, adds opponent note, picks the Nova tier, invokes AgentCore with 3× retry/fallback.
-7. **Executor agent** — [tictactoe/agent.py](../backend/tictactoe/agent.py): Nova reasons over board + note, calls `play_move`. (Tactical first runs a Nova Pro **Strategist** → A2A → executor.)
+6. **Orchestrator λ (router)** — [orchestrator.py](../backend/common/orchestrator.py): maps `tictactoe→ARN`, adds opponent note, forwards the selected `modelProfile`, invokes AgentCore with 3× retry/fallback.
+7. **Executor agent** — [tictactoe/agent.py](../backend/tictactoe/agent.py): resolves the selected profile to Nova or Claude and emits one JSON move. (Tactical first runs a model-selected **Strategist** → A2A → executor.)
 8. **Action Group λ** — [action_group.py](../backend/tictactoe/action_group.py): writes AI move, sets `currentTurn=Human`, pushes state, records result, emits a `MatchEvent`.
 9. **Commentary adapter λ** — [handler.py](../backend/commentary/handler.py): invokes Commentary AgentCore runtime ([commentary.py](../backend/commentary/commentary.py)) for line+emotion, then Polly audio ([voice.py](../backend/commentary/voice.py)) is pushed to UI; same function exposed via the shared [mcp_catalog.py](../backend/mcp_catalog.py).
 10. **Coach adapter λ** — [coach/handler.py](../backend/coach/handler.py): on the human's own move, invokes Coach AgentCore runtime ([coach.py](../backend/coach/coach.py)) and pushes one teaching tip to the UI; same function exposed via the catalog as `explain_move`.
@@ -192,12 +197,12 @@ aws-ai-agentcore-game-platform/
 │   ├── tictactoe/
 │   │   ├── rules.py                   # Apply move, evaluate winner (M∈{0,1,-1})
 │   │   ├── engine.py                  # Game engine λ: validate move, emit TurnCompleted
-│   │   ├── agent.py                   # Strands agent (Nova Lite) for AgentCore Runtime
+│   │   ├── agent.py                   # Strands agent (Nova/Claude selectable) for AgentCore Runtime
 │   │   ├── action_group.py            # Writes AI move, pushes state
 │   │   └── requirements.txt           # Agent deps
 │   └── tactical/
 │       ├── rules.py                   # 8×8 units, distance, winner
-│       ├── agent.py                   # Strands agent (Nova Pro, complexity-tiered)
+│       ├── agent.py                   # Strands agent (Nova/Claude selectable, strategist + executor)
 │       ├── action_group.py            # Validates/applies squad orders, pushes state
 │       └── requirements.txt           # Agent deps
 │
@@ -215,7 +220,7 @@ aws-ai-agentcore-game-platform/
 
 ## 6. Setup and Run to Play
 
-**Prerequisites:** Node 20+, Python 3.11, AWS SAM CLI, AWS creds, Bedrock Nova + AgentCore access.
+**Prerequisites:** Node 20+, Python 3.11, AWS SAM CLI, AWS creds, Bedrock Nova/Claude + AgentCore access.
 
 Build note: SAM packages Lambda code from `backend/requirements.txt` (boto3 only),
 so native `sam build` works on Windows without Docker. Agent-only dependencies
@@ -249,6 +254,17 @@ $env:VITE_WS_URL = "<WebSocketUrl>"; npm run dev
 
 The **Commentary** and **Coach** adapter Lambdas deploy with the stack and wake
 automatically on `MatchEvent`; they call the corresponding AgentCore runtime ARNs.
+For the play agents, set the model env vars that correspond to the six frontend
+options before `agentcore launch`.
+
+| Frontend option | Tic-Tac-Toe env var | Tactical env var |
+|---|---|---|
+| `easy_amazon` | `TICTACTOE_EASY_AMAZON_MODEL_ID` | `TACTICAL_EASY_AMAZON_MODEL_ID` |
+| `easy_claude` | `TICTACTOE_EASY_CLAUDE_MODEL_ID` | `TACTICAL_EASY_CLAUDE_MODEL_ID` |
+| `medium_amazon` | `TICTACTOE_MEDIUM_AMAZON_MODEL_ID` | `TACTICAL_MEDIUM_AMAZON_MODEL_ID` |
+| `medium_claude` | `TICTACTOE_MEDIUM_CLAUDE_MODEL_ID` | `TACTICAL_MEDIUM_CLAUDE_MODEL_ID` |
+| `hard_amazon` | `TICTACTOE_HARD_AMAZON_MODEL_ID` | `TACTICAL_HARD_AMAZON_MODEL_ID` |
+| `hard_claude` | `TICTACTOE_HARD_CLAUDE_MODEL_ID` | `TACTICAL_HARD_CLAUDE_MODEL_ID` |
 To expose reusable capabilities to other agents over MCP, run the shared catalog
 locally (stdio transport):
 
@@ -256,7 +272,7 @@ locally (stdio transport):
 cd backend; python -m mcp_catalog   # tools: generate_commentary, speak, recall_player, top_players, analyze_position, explain_move
 ```
 
-Open the dev server, click **New game**, and play X against the Nova-powered O.
+Open the dev server, click **New game**, choose one of the six model profiles, and play X against the selected AI.
 
 ## 7. Data Model
 
@@ -282,15 +298,19 @@ Leaderboard rows carry `wins/losses/draws/games/score` and GSI keys (`GSI1PK=LEA
 - Agent: [backend/tactical/agent.py](backend/tactical/agent.py) — issues one `unit_action` (move/attack) per living AI unit
 - Action Group [backend/tactical/action_group.py](backend/tactical/action_group.py) validates and applies each order
 
-**Difficulty-tiered model** — easy/medium/hard selects the Nova model per match (override with `TACTICAL_MODEL_ID`):
+The six frontend options select Nova or Claude per match. Override each tier with
+the matching env var, and use Bedrock inference profile IDs for Claude:
 
-| Difficulty | Tic-Tac-Toe | Tactical |
+| Frontend option | Tic-Tac-Toe | Tactical |
 |------|-----------|----------|
-| easy | `amazon.nova-micro-v1:0` | `amazon.nova-lite-v1:0` |
-| medium | `amazon.nova-lite-v1:0` | `amazon.nova-micro-v1:0` |
-| hard | `amazon.nova-pro-v1:0` | `amazon.nova-pro-v1:0` |
+| easy_amazon | `amazon.nova-micro-v1:0` | `amazon.nova-lite-v1:0` |
+| easy_claude | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| medium_amazon | `amazon.nova-lite-v1:0` | `amazon.nova-micro-v1:0` |
+| medium_claude | `global.anthropic.claude-sonnet-4-6` | `global.anthropic.claude-sonnet-4-6` |
+| hard_amazon | `amazon.nova-pro-v1:0` | `amazon.nova-pro-v1:0` |
+| hard_claude | `global.anthropic.claude-opus-4-7` | `global.anthropic.claude-opus-4-7` |
 
-Difficulty flows engine → orchestrator payload → agent, which builds the matching model per request.
+Selected `modelProfile` flows engine → orchestrator payload → agent, which builds the matching model per request.
 
 ## 8a. AI Layers (multi-agent, commentary, MCP, memory)
 
@@ -301,11 +321,11 @@ flowchart TB
     R["game→ARN map + retry/fallback\n+ opponent note injection"]
   end
   subgraph PLAY["Play agents"]
-    S["Strategist — Nova Pro\nbattle plan (A2A)"]
-    X["Executor — difficulty-tiered Nova\ncalls action-group tools"]
+    S["Strategist — model-selected\nbattle plan (A2A)"]
+    X["Executor — modelProfile-tiered Nova/Claude\ncalls action-group tools"]
   end
   subgraph COMM["Commentary & Coaching"]
-    C1["commentate() — Nova Micro\nline + emotion"]
+    C1["commentate() — model-selected Nova/Claude\nline + emotion"]
     C2["voice() — Polly SSML\nemotional mp3"]
     CO["coach_tip() — Nova\nteaching tip"]
     MCP([MCP catalog: commentary/memory/leaderboard/analysis/coach])
@@ -321,7 +341,7 @@ flowchart TB
 ```
 
 - **Router orchestrator** — [orchestrator.py](../backend/common/orchestrator.py): deterministic game→agent map, 3× retry with fallback, injects opponent memory.
-- **A2A (Strategist/Executor)** — [tactical/agent.py](../backend/tactical/agent.py): Nova Pro Strategist sets intent, executor issues moves (medium/hard).
+- **A2A (Strategist/Executor)** — [tactical/agent.py](../backend/tactical/agent.py): model-selected Strategist sets intent, executor issues moves.
 - **Coach (teaching A2A role)** — [coach/coach.py](../backend/coach/coach.py): a pure event consumer that never plays a move; it watches `MatchEvent` and returns one constructive tip on the human's own moves.
 - **Commentary** — [commentary/commentary.py](../backend/commentary/commentary.py) + [voice.py](../backend/commentary/voice.py): emotional caption + Polly audio per move.
 - **Board analysis** — [common/analysis.py](../backend/common/analysis.py): model-free heuristics returning immediate threats/opportunities and a one-line read.
@@ -331,7 +351,7 @@ flowchart TB
 ## 9. Extending to New Games
 
 1. Add the game to `GameId` and a rules module beside `game.ts`.
-2. Build a new agent under `agent/` (Nova Lite for tactical, Nova Pro for reasoning).
+2. Build a new agent under `agent/` (selectable model profile for tactical, reasoning models for harder games).
 3. Register its runtime ARN in the orchestrator `AGENT_RUNTIME` map.
 4. Reuse the same WebSocket, EventBridge, action-group, **commentary, coaching, and memory** pattern — these fire on `MatchEvent` and need no per-game code.
 5. (Optional) add a board analyzer in [analysis.py](../backend/common/analysis.py) so the new game gains `analyze_position` in the MCP catalog.

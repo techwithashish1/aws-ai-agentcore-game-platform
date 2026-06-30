@@ -35,11 +35,6 @@ Each model has a complexity tier that affects reasoning depth and tactics:
 - Claude Sonnet 4.5
 - Behavior: Strategic depth; adapts to player positioning and damage trades
 
-#### Top Complexity
-- Claude Opus 4.7
-- Claude Opus 4.8
-- Behavior: Maximum reasoning; complex multi-unit tactics and long-term plans
-- Note: Takes longer per turn due to extended token budgets
 
 ## AI Source Verification
 

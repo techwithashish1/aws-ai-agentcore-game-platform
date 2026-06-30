@@ -18,7 +18,7 @@ flowchart LR
   WS --> ENG["Game Engine λ"] --> DDB[("DynamoDB\nmatches+profiles+leaderboard")]
   ENG -->|TurnCompleted / MatchEvent| EB{{EventBridge}}
   EB --> ORC["Orchestrator λ (router)"]
-  ORC -->|invoke runtime| STRAT["Strategist (Nova Pro)\nTactical only"]
+  ORC -->|invoke runtime| STRAT["Strategist\nmodel-selected Tactical only"]
   STRAT -.A2A plan.-> EXEC["Executor agent\nAgentCore Runtime"]
   ORC -.->|Tic-Tac-Toe: no Strategist| EXEC
   EXEC --> AG["Action Group λ"]
@@ -104,22 +104,39 @@ sam deploy --parameter-overrides `
 
 ## Model configuration
 
-By default, Tic-Tac-Toe and Tactical use Nova model IDs, but the runtime can be
-repointed per difficulty tier without code changes.
+The frontend now exposes six explicit model profiles. When the player starts a
+match, that profile is sent to AgentCore and the runtime picks the matching model
+on the fly.
 
-| Runtime | Easy | Medium | Hard |
-|---------|------|--------|------|
-| Tic-Tac-Toe | `TICTACTOE_EASY_MODEL_ID` | `TICTACTOE_MEDIUM_MODEL_ID` | `TICTACTOE_HARD_MODEL_ID` |
-| Tactical | `TACTICAL_EASY_MODEL_ID` | `TACTICAL_MEDIUM_MODEL_ID` | `TACTICAL_HARD_MODEL_ID` |
+Claude uses Bedrock inference profile IDs or ARNs, not plain on-demand model IDs.
+The repo defaults use profile-style IDs such as `us.*` and `global.*`, but if
+your account or region differs, replace them with the exact profile from the
+Bedrock console.
 
-For Tactical, the strategist can also be changed with `TACTICAL_STRATEGIST_MODEL_ID`.
+| Frontend option | Tic-Tac-Toe env var | Tactical env var |
+|---|---|---|
+| `easy_amazon` | `TICTACTOE_EASY_AMAZON_MODEL_ID` | `TACTICAL_EASY_AMAZON_MODEL_ID` |
+| `easy_claude` | `TICTACTOE_EASY_CLAUDE_MODEL_ID` | `TACTICAL_EASY_CLAUDE_MODEL_ID` |
+| `medium_amazon` | `TICTACTOE_MEDIUM_AMAZON_MODEL_ID` | `TACTICAL_MEDIUM_AMAZON_MODEL_ID` |
+| `medium_claude` | `TICTACTOE_MEDIUM_CLAUDE_MODEL_ID` | `TACTICAL_MEDIUM_CLAUDE_MODEL_ID` |
+| `hard_amazon` | `TICTACTOE_HARD_AMAZON_MODEL_ID` | `TACTICAL_HARD_AMAZON_MODEL_ID` |
+| `hard_claude` | `TICTACTOE_HARD_CLAUDE_MODEL_ID` | `TACTICAL_HARD_CLAUDE_MODEL_ID` |
 
-Example Claude values:
+Default values:
+
+- Easy Amazon: Nova Micro
+- Easy Claude: Claude Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`)
+- Medium Amazon: Nova Lite
+- Medium Claude: Claude Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6`)
+- Hard Amazon: Nova Pro
+- Hard Claude: Claude Opus 4.6 (`global.anthropic.claude-opus-4-6-v1`)
+
+Example override:
 
 ```powershell
-$env:TICTACTOE_EASY_MODEL_ID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-$env:TICTACTOE_MEDIUM_MODEL_ID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-$env:TICTACTOE_HARD_MODEL_ID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+$env:TICTACTOE_EASY_CLAUDE_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+$env:TICTACTOE_MEDIUM_CLAUDE_MODEL_ID = "global.anthropic.claude-sonnet-4-6"
+$env:TICTACTOE_HARD_CLAUDE_MODEL_ID = "global.anthropic.claude-opus-4-7"
 ```
 
 Set the variables before `agentcore launch`, then relaunch the runtime after any change.
@@ -132,10 +149,13 @@ machine-specific files do not need to be checked in.
 
 ## Model map
 
-| Use | Model | Reason |
-|------|-------|--------|
-| Tic-Tac-Toe (easy/med/hard) | Nova Micro/Lite/Pro | difficulty-tiered |
-| Tactical (easy/med/hard) | Nova Lite/Micro/Pro | difficulty-tiered |
-| Strategist (A2A) | Nova Pro | battle planning |
-| Commentary | Nova Micro + Polly | fast emotional calls |
-| Logic Riddles (future) | Nova Pro | deep text reasoning |
+| Frontend option | Tic-Tac-Toe | Tactical |
+|---|---|---|
+| `easy_amazon` | Nova Micro | Nova Lite |
+| `easy_claude` | Claude Haiku 4.5 (`us.*` inference profile) | Claude Haiku 4.5 (`us.*` inference profile) |
+| `medium_amazon` | Nova Lite | Nova Micro |
+| `medium_claude` | Claude Sonnet 4.6 (`global.*` inference profile) | Claude Sonnet 4.6 (`global.*` inference profile) |
+| `hard_amazon` | Nova Pro | Nova Pro |
+| `hard_claude` | Claude Opus 4.6 (`global.*` inference profile) | Claude Opus 4.6 (`global.*` inference profile) |
+
+Strategist remains model-selected for Tactical Arena, while Commentary and Coach keep their own runtime model settings.

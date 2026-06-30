@@ -5,18 +5,30 @@ import { Commentary } from "./common/Commentary";
 import { Coach } from "./common/Coach";
 import { TicTacToe } from "./tictactoe/TicTacToe";
 import { TacticalArena } from "./tactical/TacticalArena";
+import type { ModelProfile } from "./common/types";
+
+const MODEL_OPTIONS: Array<{ value: ModelProfile; label: string; difficulty: "easy" | "medium" | "hard" }> = [
+  { value: "easy_amazon", label: "Easy - Amazon Nova Micro", difficulty: "easy" },
+  { value: "easy_claude", label: "Easy - Claude Haiku 4.5", difficulty: "easy" },
+  { value: "medium_amazon", label: "Medium - Amazon Nova Lite", difficulty: "medium" },
+  { value: "medium_claude", label: "Medium - Claude Sonnet 4.6", difficulty: "medium" },
+  { value: "hard_amazon", label: "Hard - Amazon Nova Pro", difficulty: "hard" },
+  { value: "hard_claude", label: "Hard - Claude Opus 4.6", difficulty: "hard" },
+];
 
 export function App() {
   const { match, status, board, commentary, coach, send } = useGame();
   const [game, setGame] = useState<"tictactoe" | "tactical">("tictactoe");
   const [username, setUsername] = useState("guest");
-  const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("easy");
+  const [modelProfile, setModelProfile] = useState<ModelProfile>("easy_amazon");
+
+  const difficulty = MODEL_OPTIONS.find((opt) => opt.value === modelProfile)?.difficulty ?? "easy";
 
   const start = () => {
     if (game === "tactical") {
-      send({ action: "tactical_new", username, difficulty });
+      send({ action: "tactical_new", username, difficulty, modelProfile });
     } else {
-      send({ action: "move", username, difficulty });
+      send({ action: "move", username, difficulty, modelProfile });
     }
   };
   const refresh = () => send({ action: "leaderboard", game, difficulty });
@@ -53,18 +65,17 @@ export function App() {
 
       <aside className="sidebar">
         <section className="panel start-panel">
-          <p className="eyebrow"><h1>Human vs. AI Arena</h1></p>
-          {/* <h1>Human vs. AI Arena</h1> */}
+          <h1 className="eyebrow">Human vs. AI Arena</h1>
           <label className="field">
             Username
             <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="username" />
           </label>
           <label className="field">
-            Difficulty
-            <select value={difficulty} onChange={(e) => setDifficulty(e.target.value as any)}>
-              <option value="easy">Easy</option>
-              <option value="medium">Medium</option>
-              <option value="hard">Hard</option>
+            AI model
+            <select value={modelProfile} onChange={(e) => setModelProfile(e.target.value as ModelProfile)}>
+              {MODEL_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
             </select>
           </label>
           <div className="game-switch">
@@ -85,6 +96,7 @@ export function App() {
           <div className="metric-grid">
             <div className="metric-card"><span>Game</span><strong>{game === "tictactoe" ? "Tic-Tac-Toe" : "Tactical"}</strong></div>
             <div className="metric-card"><span>Difficulty</span><strong>{difficulty}</strong></div>
+            <div className="metric-card"><span>Model</span><strong>{modelProfile.replace("_", " ")}</strong></div>
             <div className="metric-card"><span>Player</span><strong>{username || "guest"}</strong></div>
             <div className="metric-card"><span>Connection</span><strong>{connected ? "Live" : "…"}</strong></div>
           </div>

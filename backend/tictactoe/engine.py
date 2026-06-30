@@ -30,7 +30,8 @@ def lambda_handler(event, _ctx):
         mid = str(uuid.uuid4())
         match = {"PK": match_pk(mid), "SK": "META", "matchId": mid, "gameId": "tictactoe",
                  "connectionId": cid, "currentTurn": "Human", "username": body.get("username", "guest"),
-                 "difficulty": body.get("difficulty", "easy"), "state": {"board": empty_board(), "winner": None}}
+                 "difficulty": body.get("difficulty", "easy"), "modelProfile": body.get("modelProfile", "easy_amazon"),
+                 "state": {"board": empty_board(), "winner": None}}
 
     if match["currentTurn"] != "Human" or match["state"]["winner"]:
         return _reject(endpoint, cid, "Not your turn")

@@ -19,4 +19,12 @@ export interface TacticalMatch {
 }
 export type Match = TicTacToeMatch | TacticalMatch;
 
+export type ModelProfile =
+  | "easy_amazon"
+  | "easy_claude"
+  | "medium_amazon"
+  | "medium_claude"
+  | "hard_amazon"
+  | "hard_claude";
+
 export const WS_URL = import.meta.env.VITE_WS_URL ?? "wss://localhost";

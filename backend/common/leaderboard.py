@@ -42,8 +42,35 @@ def top(game: str, difficulty: str, limit: int = 10):
         KeyConditionExpression=Key("GSI1PK").eq(_pk(game, difficulty)),
         ScanIndexForward=False, Limit=limit,
     )
+    if res["Items"]:
+        return [
+            {"username": i["username"], "score": int(i.get("score", 0)), "wins": int(i.get("wins", 0)),
+             "losses": int(i.get("losses", 0)), "draws": int(i.get("draws", 0)), "games": int(i.get("games", 0))}
+            for i in res["Items"]
+        ]
+
+    if difficulty not in DIFFICULTIES:
+        return []
+
+    merged = {}
+    for tier in DIFFICULTIES:
+        tier_rows = table.query(
+            IndexName="Leaderboard",
+            KeyConditionExpression=Key("GSI1PK").eq(_pk(game, tier)),
+            ScanIndexForward=False,
+        )["Items"]
+        for item in tier_rows:
+            username = item["username"]
+            acc = merged.setdefault(username, {"username": username, "score": 0, "wins": 0, "losses": 0, "draws": 0, "games": 0})
+            acc["score"] += int(item.get("score", 0))
+            acc["wins"] += int(item.get("wins", 0))
+            acc["losses"] += int(item.get("losses", 0))
+            acc["draws"] += int(item.get("draws", 0))
+            acc["games"] += int(item.get("games", 0))
+
+    rows = sorted(merged.values(), key=lambda row: (-row["score"], row["username"]))[:limit]
     return [
         {"username": i["username"], "score": int(i.get("score", 0)), "wins": int(i.get("wins", 0)),
          "losses": int(i.get("losses", 0)), "draws": int(i.get("draws", 0)), "games": int(i.get("games", 0))}
-        for i in res["Items"]
+        for i in rows
     ]

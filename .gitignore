@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+coverage/
+
+# AWS SAM / build artifacts
+.aws-sam/
+.serverless/
+*.template.yaml
+
+# Local agent/runtime config and deploy state
+backend/**/.bedrock_agentcore.yaml
+samconfig.toml
+
+# Environment files
+.env
+.env.*
+frontend/.env
+frontend/.env.*
+backend/.env
+backend/.env.*
+package-lock.json
+
+# Logs and OS junk
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor settings
+.vscode/
+.idea/
+
+#Ignore Dockerfile and docker-compose files
+Dockerfile
+.dockerignore 

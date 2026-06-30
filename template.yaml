@@ -1,0 +1,459 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Human vs. AI Multi-Agent Gaming Platform - Logic Riddles slice
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+  AgentRuntimeArn:
+    Type: String
+    Default: ''
+    Description: ARN of the tic-tac-toe AgentCore Runtime. Set after agent deploy.
+  TacticalAgentArn:
+    Type: String
+    Default: ''
+    Description: ARN of the Tactical Arena AgentCore Runtime. Set after agent deploy.
+  CommentaryRuntimeArn:
+    Type: String
+    Default: ''
+    Description: ARN of the Commentary AgentCore Runtime. Set after agent deploy.
+  CoachRuntimeArn:
+    Type: String
+    Default: ''
+    Description: ARN of the Coach AgentCore Runtime. Set after agent deploy.
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Tracing: Active
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref GameTable
+        EVENT_BUS: !Ref GameEventBus
+
+Resources:
+  # --- DynamoDB single-table ---
+  GameTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: N
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: Leaderboard
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection: { ProjectionType: ALL }
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+  GameEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub game-platform-${Stage}
+
+  # --- WebSocket API ---
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub game-ws-${Stage}
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: $request.body.action
+
+  ConnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: common.connect.lambda_handler
+      Runtime: python3.11
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+  DisconnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: common.disconnect.lambda_handler
+      Runtime: python3.11
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+
+  GameEngineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: tictactoe.engine.lambda_handler
+      Runtime: python3.11
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref GameEventBus
+        - Statement:
+            - Effect: Allow
+              Action: [execute-api:ManageConnections]
+              Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+
+  OrchestratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: common.orchestrator.lambda_handler
+      Runtime: python3.11
+      Timeout: 120
+      Environment:
+        Variables:
+          TICTACTOE_AGENT_ARN: !Ref AgentRuntimeArn
+          TACTICAL_AGENT_ARN: !Ref TacticalAgentArn
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - Statement:
+            - Effect: Allow
+              Action: [bedrock-agentcore:InvokeAgentRuntime]
+              Resource: '*'
+      Events:
+        TurnCompleted:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref GameEventBus
+            Pattern:
+              source: [game.engine]
+              detail-type: [TurnCompleted]
+
+  TicTacToeActionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: tictactoe.action_group.lambda_handler
+      Runtime: python3.11
+      CodeUri: backend
+      Environment:
+        Variables:
+          WS_ENDPOINT: !Sub https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref GameEventBus
+        - Statement:
+            - Effect: Allow
+              Action: [execute-api:ManageConnections]
+              Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+
+  TacticalActionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: tactical.action_group.lambda_handler
+      Runtime: python3.11
+      CodeUri: backend
+      Environment:
+        Variables:
+          WS_ENDPOINT: !Sub https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref GameEventBus
+        - Statement:
+            - Effect: Allow
+              Action: [execute-api:ManageConnections]
+              Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+
+  TicTacToeRuntimeInvokeActionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: TicTacToeRuntimeInvokeActionPolicy
+      Roles:
+        - AmazonBedrockAgentCoreSDKRuntime-us-east-1-63283f22dc
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [lambda:InvokeFunction]
+            Resource:
+              - !GetAtt TicTacToeActionFunction.Arn
+              - !Sub ${TicTacToeActionFunction.Arn}:*
+
+  TacticalRuntimeInvokeActionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: TacticalRuntimeInvokeActionPolicy
+      Roles:
+        - AmazonBedrockAgentCoreSDKRuntime-us-east-1-f12b2a266e
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [lambda:InvokeFunction]
+            Resource:
+              - !GetAtt TacticalActionFunction.Arn
+              - !Sub ${TacticalActionFunction.Arn}:*
+
+  TacticalEngineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: tactical.engine.lambda_handler
+      Runtime: python3.11
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref GameEventBus
+        - Statement:
+            - Effect: Allow
+              Action: [execute-api:ManageConnections]
+              Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+
+  LeaderboardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: common.leaderboard_route.lambda_handler
+      Runtime: python3.11
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+
+  CommentaryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: commentary.handler.lambda_handler
+      Runtime: python3.11
+      Timeout: 30
+      Environment:
+        Variables:
+          COMMENTARY_RUNTIME_ARN: !Ref CommentaryRuntimeArn
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [bedrock-agentcore:InvokeAgentRuntime]
+              Resource: '*'
+        - Statement:
+            - Effect: Allow
+              Action: [polly:SynthesizeSpeech]
+              Resource: '*'
+        - Statement:
+            - Effect: Allow
+              Action: [execute-api:ManageConnections]
+              Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+      Events:
+        MatchEvent:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref GameEventBus
+            Pattern:
+              source: [game.engine]
+              detail-type: [MatchEvent]
+
+  CoachFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: coach.handler.lambda_handler
+      Runtime: python3.11
+      Timeout: 30
+      Environment:
+        Variables:
+          COACH_RUNTIME_ARN: !Ref CoachRuntimeArn
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [bedrock-agentcore:InvokeAgentRuntime]
+              Resource: '*'
+        - Statement:
+            - Effect: Allow
+              Action: [execute-api:ManageConnections]
+              Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+      Events:
+        MatchEvent:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref GameEventBus
+            Pattern:
+              source: [game.engine]
+              detail-type: [MatchEvent]
+
+  # --- WS integrations/routes ---
+  ConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectFunction.Arn}/invocations
+  DisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DisconnectFunction.Arn}/invocations
+  MoveIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GameEngineFunction.Arn}/invocations
+  TacticalMoveIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TacticalEngineFunction.Arn}/invocations
+  LeaderboardIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LeaderboardFunction.Arn}/invocations
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $connect
+      Target: !Sub integrations/${ConnectIntegration}
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $disconnect
+      Target: !Sub integrations/${DisconnectIntegration}
+  MoveRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: move
+      Target: !Sub integrations/${MoveIntegration}
+  TacticalMoveRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: tactical_move
+      Target: !Sub integrations/${TacticalMoveIntegration}
+  TacticalAttackRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: tactical_attack
+      Target: !Sub integrations/${TacticalMoveIntegration}
+  TacticalEndTurnRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: tactical_end_turn
+      Target: !Sub integrations/${TacticalMoveIntegration}
+  TacticalNewMatchRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: tactical_new
+      Target: !Sub integrations/${TacticalMoveIntegration}
+  LeaderboardRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: leaderboard
+      Target: !Sub integrations/${LeaderboardIntegration}
+
+  # Logical ID is versioned so adding/changing routes forces a fresh API Gateway
+  # deployment snapshot onto the stage (a Deployment is a point-in-time snapshot;
+  # CloudFormation will not redeploy an existing one just because routes changed).
+  DeploymentV2:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn: [ConnectRoute, DisconnectRoute, MoveRoute, TacticalMoveRoute, TacticalAttackRoute, TacticalEndTurnRoute, TacticalNewMatchRoute, LeaderboardRoute]
+    Properties:
+      ApiId: !Ref WebSocketApi
+  WebSocketStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WebSocketApi
+      DeploymentId: !Ref DeploymentV2
+      StageName: !Ref Stage
+
+  ConnectPerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ConnectFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  DisconnectPerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DisconnectFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  MovePerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GameEngineFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  TacticalEnginePerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TacticalEngineFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  TicTacToeActionFromTttRuntimePerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TicTacToeActionFunction
+      Action: lambda:InvokeFunction
+      Principal: !Sub arn:aws:iam::${AWS::AccountId}:role/AmazonBedrockAgentCoreSDKRuntime-us-east-1-d1abfe7f57
+  TicTacToeActionFromTacRuntimePerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TicTacToeActionFunction
+      Action: lambda:InvokeFunction
+      Principal: !Sub arn:aws:iam::${AWS::AccountId}:role/AmazonBedrockAgentCoreSDKRuntime-us-east-1-bca559972e
+  TacticalActionFromTttRuntimePerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TacticalActionFunction
+      Action: lambda:InvokeFunction
+      Principal: !Sub arn:aws:iam::${AWS::AccountId}:role/AmazonBedrockAgentCoreSDKRuntime-us-east-1-d1abfe7f57
+  TacticalActionFromTacRuntimePerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TacticalActionFunction
+      Action: lambda:InvokeFunction
+      Principal: !Sub arn:aws:iam::${AWS::AccountId}:role/AmazonBedrockAgentCoreSDKRuntime-us-east-1-bca559972e
+  LeaderboardPerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LeaderboardFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+
+Outputs:
+  WebSocketUrl:
+    Value: !Sub wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}
+  TableName:
+    Value: !Ref GameTable
+  EventBus:
+    Value: !Ref GameEventBus
+  TicTacToeActionFn:
+    Description: Deployed name of the Tic-Tac-Toe action-group Lambda (set as ACTION_GROUP_FUNCTION for the tictactoe agent)
+    Value: !Ref TicTacToeActionFunction
+  TacticalActionFn:
+    Description: Deployed name of the Tactical action-group Lambda (set as ACTION_GROUP_FUNCTION for the tactical agent)
+    Value: !Ref TacticalActionFunction
